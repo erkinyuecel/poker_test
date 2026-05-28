@@ -34,7 +34,16 @@ This repository contains the code and solutions for the Programming for Manageme
 	- Hidden card back: `back.png`
 	- If an image is missing, the web app falls back to text on the card.
 
-6. **Modules:**
+6. **GitHub Pages (landing page):**
+	- Edit `docs/config.js` and set:
+	```js
+	window.POKER_BACKEND_URL = "https://your-backend-url";
+	```
+	- Push to `main`.
+	- In GitHub repo settings, enable **Pages** (if not already).  
+	  Workflow `.github/workflows/pages.yml` deploys `docs/` automatically.
+
+7. **Modules:**
 	- Each module represents a component of the card game (e.g., player logic, game rules, table management).
 
 ## Contributing

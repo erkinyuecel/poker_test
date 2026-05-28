@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from random import random
 from uuid import uuid4
 
 from flask import Flask, redirect, render_template_string, request, session, url_for
 
+from bot_learner import BotLearner
 from cards import Deck
 from evaluator import HandCategory, HandEvaluator
+from game_stats import init_db, save_game_result, get_player_stats, get_leaderboard
 from player import Player
 from table import Table
 
 STARTING_CHIPS = 1_000
 GAMES: dict[str, "WebPokerGame"] = {}
+BOTS_DIR = Path("bots_data")
+BOTS_DIR.mkdir(exist_ok=True)
+
+init_db()
 
 
 class WebPokerGame:
@@ -22,9 +29,22 @@ class WebPokerGame:
         self.big_blind = big_blind
         self.players = [
             Player("You", chips=STARTING_CHIPS, is_human=True),
-            Player("Ada Bot", chips=STARTING_CHIPS),
-            Player("Grace Bot", chips=STARTING_CHIPS),
+            Player("Ada (Conservative)", chips=STARTING_CHIPS),
+            Player("Grace (Aggressive)", chips=STARTING_CHIPS),
+            Player("Charlie (Balanced)", chips=STARTING_CHIPS),
+            Player("Zara (Bluffer)", chips=STARTING_CHIPS),
         ]
+        self.bot_learners = [
+            None,
+            BotLearner("Ada", tightness=0.7, aggression=0.3, bluff_rate=0.1),
+            BotLearner("Grace", tightness=0.2, aggression=0.9, bluff_rate=0.4),
+            BotLearner("Charlie", tightness=0.5, aggression=0.6, bluff_rate=0.2),
+            BotLearner("Zara", tightness=0.1, aggression=0.8, bluff_rate=0.5),
+        ]
+        for i in range(1, 5):
+            name = self.bot_learners[i].name.lower()
+            self.bot_learners[i].load(BOTS_DIR / f"{name}_bot.json")
+
         self.table = Table()
         self.evaluator = HandEvaluator()
         self.deck: Deck | None = None
@@ -39,6 +59,7 @@ class WebPokerGame:
         self.awaiting_human = False
         self.game_over = False
         self.messages: list[str] = []
+        self.hand_initial_chips = [p.chips for p in self.players]
 
     def add_message(self, message: str) -> None:
         self.messages.append(message)
@@ -55,6 +76,8 @@ class WebPokerGame:
             self.game_over = True
             self.add_message("Game over: not enough players with chips.")
             return
+
+        self.hand_initial_chips = [p.chips for p in self.players]
 
         self.hand_number += 1
         self.street = "preflop"
@@ -282,6 +305,9 @@ class WebPokerGame:
         winner_names = ", ".join(self.players[seat].name for seat in winners)
         self.add_message(f"Winner: {winner_names} ({best_rank.category_name})")
         self.table.pot = 0
+
+        self._learn_from_hand(winners)
+
         self.hand_over = True
         self.awaiting_human = False
         self.street = "finished"
@@ -299,6 +325,9 @@ class WebPokerGame:
         winner.chips += self.table.pot
         self.add_message(f"{winner.name} wins {self.table.pot} (everyone else folded)")
         self.table.pot = 0
+
+        self._learn_from_hand(active)
+
         self.hand_over = True
         self.awaiting_human = False
         self.street = "finished"
@@ -310,6 +339,7 @@ class WebPokerGame:
         if human.chips <= 0:
             self.game_over = True
             self.add_message("You are out of chips. Start a new game to continue.")
+            self._save_player_stats(human, False)
             return
         if not live:
             self.game_over = True
@@ -317,30 +347,55 @@ class WebPokerGame:
             return
         if len(live) == 1:
             self.game_over = True
-            self.add_message(f"{self.players[live[0]].name} wins the match.")
+            winner = self.players[live[0]]
+            self.add_message(f"{winner.name} wins the match.")
+            is_human_winner = (live[0] == 0)
+            self._save_player_stats(human, is_human_winner)
 
     def _bot_decision(self, player: Player, call_amount: int) -> tuple[str, int | None]:
+        seat = self.players.index(player)
+        learner = self.bot_learners[seat]
+
         strength = self._estimate_strength(player)
-        if call_amount == 0:
-            if strength > 0.65 and player.chips >= self.big_blind * 2:
-                raise_to = min(
-                    player.current_bet + player.chips, self.current_bet + self.big_blind * 2
-                )
-                if raise_to > self.current_bet:
-                    return "raise", raise_to
-            if strength > 0.5 and random() < 0.2 and player.chips >= self.big_blind:
-                raise_to = min(player.current_bet + player.chips, self.current_bet + self.big_blind)
-                if raise_to > self.current_bet:
-                    return "raise", raise_to
+        
+        # Apply personality to strength
+        strength -= (learner.tightness * 0.15)  # Tight bots fold weaker hands
+        strength += (learner.aggression * 0.1)  # Aggressive bots play stronger hands
+        strength = max(0.0, min(1.0, strength))
+        
+        # Bluff chance
+        if random() < learner.bluff_rate:
+            strength = max(strength, 0.4 + random() * 0.3)
+        
+        pot_odds = call_amount / max(self.table.pot + call_amount, 1)
+        stack_pressure = call_amount / max(player.chips, 1)
+
+        state = learner.discretize_state(strength, pot_odds, stack_pressure)
+        valid_actions = ["fold", "call", "raise"] if call_amount > 0 else ["check", "raise"]
+
+        action = learner.get_action(state, valid_actions)
+        learner.record_action(state, action)
+
+        if action == "fold":
+            return "fold", None
+        if action == "check":
             return "check", None
 
-        pressure = call_amount / max(player.chips, 1)
-        if strength < 0.28 and pressure > 0.25:
-            return "fold", None
-        if strength > 0.75 and player.chips >= call_amount + self.big_blind:
-            raise_to = min(player.current_bet + player.chips, self.current_bet + self.big_blind * 2)
-            if raise_to > self.current_bet:
-                return "raise", raise_to
+        if action == "raise":
+            if call_amount == 0:
+                if strength > 0.5 - (learner.tightness * 0.2) and player.chips >= self.big_blind:
+                    raise_amount = max(self.big_blind, int(self.big_blind * (0.5 + learner.aggression)))
+                    raise_to = min(player.current_bet + player.chips, self.current_bet + raise_amount)
+                    if raise_to > self.current_bet:
+                        return "raise", raise_to
+                return "check", None
+
+            if strength > 0.6 - (learner.tightness * 0.2) and player.chips >= call_amount + self.big_blind:
+                raise_amount = max(call_amount, int(self.big_blind * (1.0 + learner.aggression)))
+                raise_to = min(player.current_bet + player.chips, self.current_bet + raise_amount)
+                if raise_to > self.current_bet:
+                    return "raise", raise_to
+
         return "call", None
 
     def _estimate_strength(self, player: Player) -> float:
@@ -365,6 +420,24 @@ class WebPokerGame:
             HandCategory.STRAIGHT_FLUSH: 0.99,
         }[rank.category]
         return min(0.99, base + (rank.tiebreakers[0] / 100))
+
+    def _learn_from_hand(self, winners: list[int]) -> None:
+        for seat in range(1, 5):
+            learner = self.bot_learners[seat]
+            if seat in winners:
+                reward = (self.players[seat].chips - self.hand_initial_chips[seat]) / 100.0
+                reward = max(1.0, min(reward, 10.0))
+            else:
+                reward = (self.players[seat].chips - self.hand_initial_chips[seat]) / 100.0
+                reward = min(-0.1, max(reward, -5.0))
+
+            learner.learn_from_result(reward)
+
+            learner.save(BOTS_DIR / f"{learner.name.lower()}_bot.json")
+
+    def _save_player_stats(self, player: Player, is_winner: bool) -> None:
+        chips_change = player.chips - STARTING_CHIPS
+        save_game_result(player.name, is_winner, chips_change)
 
     def _post_blind(self, seat: int, blind_amount: int) -> int:
         player = self.players[seat]

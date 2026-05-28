@@ -217,3 +217,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Bot learning data (regenerate on each deploy)
+bots_data/
+
+# Cache
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Poker Web App</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Texas Hold'em — Web Poker</h1>
+    <p class="subtitle">
+      This GitHub Pages site is the public landing page. The playable game runs on a Flask server URL.
+    </p>
+
+    <section class="card">
+      <h2>Play</h2>
+      <p id="status" class="status"></p>
+      <div class="row">
+        <button id="play-btn" class="btn" type="button">Open Game</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Configure backend URL</h2>
+      <p>
+        Set your deployed Flask URL here once (example: <code>https://your-app.onrender.com</code>).
+      </p>
+      <div class="row">
+        <input id="backend-url" type="url" placeholder="https://your-app.onrender.com" />
+        <button id="save-btn" class="btn" type="button">Save URL</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="./config.js"></script>
+  <script>
+    const STORAGE_KEY = "poker_backend_url";
+    const playBtn = document.getElementById("play-btn");
+    const saveBtn = document.getElementById("save-btn");
+    const backendInput = document.getElementById("backend-url");
+    const statusEl = document.getElementById("status");
+
+    function normalize(url) {
+      return (url || "").trim().replace(/\/+$/, "");
+    }
+
+    function getConfiguredUrl() {
+      const saved = normalize(localStorage.getItem(STORAGE_KEY) || "");
+      if (saved) return saved;
+      const defaultFromConfig = normalize(window.POKER_BACKEND_URL || "");
+      return defaultFromConfig;
+    }
+
+    function setStatus(message, isOk) {
+      statusEl.textContent = message;
+      statusEl.className = isOk ? "status ok" : "status warn";
+    }
+
+    function refresh() {
+      const url = getConfiguredUrl();
+      if (!url || url.includes("REPLACE_WITH_YOUR_BACKEND_URL")) {
+        setStatus("Backend URL is not configured yet.", false);
+        playBtn.disabled = true;
+      } else {
+        setStatus(`Backend: ${url}`, true);
+        playBtn.disabled = false;
+      }
+    }
+
+    playBtn.addEventListener("click", () => {
+      const url = getConfiguredUrl();
+      if (!url || url.includes("REPLACE_WITH_YOUR_BACKEND_URL")) return;
+      window.open(url, "_blank", "noopener,noreferrer");
+    });
+
+    saveBtn.addEventListener("click", () => {
+      const value = normalize(backendInput.value);
+      if (!value) return;
+      localStorage.setItem(STORAGE_KEY, value);
+      backendInput.value = "";
+      refresh();
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
