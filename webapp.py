@@ -20,7 +20,11 @@ GAMES: dict[str, "WebPokerGame"] = {}
 BOTS_DIR = Path("bots_data")
 BOTS_DIR.mkdir(exist_ok=True)
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"⚠️ Database initialization warning: {e}")
+    print("Tables might not exist. Will attempt to create on first request.")
 
 
 class WebPokerGame:
