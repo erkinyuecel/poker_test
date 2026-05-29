@@ -701,6 +701,8 @@ def _get_current_game() -> WebPokerGame | None:
 @app.get("/")
 def index():
     game = _get_current_game()
+    if game and not game.awaiting_human and not game.hand_over and not game.game_over:
+        game._run_until_human()
     options = game.human_options() if game else None
     selected_count = _normalize_player_count(session.get("player_count"))
     return render_template_string(
