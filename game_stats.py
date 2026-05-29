@@ -1,7 +1,9 @@
 """Player stats persistence using PostgreSQL (Supabase)."""
 
 import os
+import socket
 from contextlib import contextmanager
+from urllib.parse import urlparse
 
 import psycopg2
 from dotenv import load_dotenv
@@ -9,12 +11,38 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_FORCE_IPV4 = os.getenv("DATABASE_FORCE_IPV4", "").lower() in {"1", "true", "yes"}
+DATABASE_HOSTADDR = os.getenv("DATABASE_HOSTADDR")
+
+
+def _resolve_ipv4_hostaddr(database_url: str) -> str:
+    parsed = urlparse(database_url)
+    host = parsed.hostname
+    port = parsed.port or 5432
+    if not host:
+        raise RuntimeError("DATABASE_URL is missing a hostname.")
+    infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+    if not infos:
+        raise RuntimeError(f"No IPv4 address found for database host {host}.")
+    return infos[0][4][0]
+
+
+def _get_connection_hostaddr() -> str | None:
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set.")
+    if DATABASE_FORCE_IPV4:
+        return DATABASE_HOSTADDR or _resolve_ipv4_hostaddr(DATABASE_URL)
+    return DATABASE_HOSTADDR
 
 
 @contextmanager
 def get_db_connection():
     """Get database connection."""
-    conn = psycopg2.connect(DATABASE_URL)
+    hostaddr = _get_connection_hostaddr()
+    if hostaddr:
+        conn = psycopg2.connect(DATABASE_URL, hostaddr=hostaddr)
+    else:
+        conn = psycopg2.connect(DATABASE_URL)
     try:
         yield conn
     finally:
