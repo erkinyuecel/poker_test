@@ -683,6 +683,57 @@ TEMPLATE = """
       </ul>
     </div>
   {% endif %}
+
+  <div class="card">
+    <strong>Your Stats</strong>
+    {% if stats_error %}
+      <p class="muted">Stats unavailable: {{ stats_error }}</p>
+    {% elif stats %}
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Hands</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Chips Won</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>{{ stats.name }}</td>
+            <td>{{ stats.hands_played }}</td>
+            <td>{{ stats.wins }}</td>
+            <td>{{ stats.losses }}</td>
+            <td>{{ '%.1f'|format(stats.win_rate) }}%</td>
+            <td>{{ stats.total_chips_won }}</td>
+          </tr>
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No stats yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <strong>Leaderboard</strong>
+    {% if stats_error %}
+      <p class="muted">Leaderboard unavailable: {{ stats_error }}</p>
+    {% elif leaderboard %}
+      <table>
+        <thead>
+          <tr><th>#</th><th>Name</th><th>Hands</th><th>Win Rate</th><th>Chips Won</th></tr>
+        </thead>
+        <tbody>
+          {% for row in leaderboard %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td>{{ row.name }}</td>
+              <td>{{ row.hands_played }}</td>
+              <td>{{ '%.1f'|format(row.win_rate) }}%</td>
+              <td>{{ row.total_chips_won }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No stats yet.</p>
+    {% endif %}
+  </div>
 </body>
 </html>
 """
@@ -705,12 +756,24 @@ def index():
         game._run_until_human()
     options = game.human_options() if game else None
     selected_count = _normalize_player_count(session.get("player_count"))
+    player_name = game.players[0].name if game else "You"
+    stats = None
+    leaderboard = []
+    stats_error = None
+    try:
+        stats = get_player_stats(player_name)
+        leaderboard = get_leaderboard()
+    except Exception as exc:
+        stats_error = str(exc)
     return render_template_string(
         TEMPLATE,
         game=game,
         options=options,
         player_counts=range(MIN_PLAYERS, MAX_PLAYERS + 1),
         selected_count=selected_count,
+        stats=stats,
+        leaderboard=leaderboard,
+        stats_error=stats_error,
     )
 
 
