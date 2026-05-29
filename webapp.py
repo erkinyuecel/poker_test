@@ -121,8 +121,12 @@ class WebPokerGame:
             self.players[seat].receive(self.deck.draw(2))
 
         self.dealer_index = self._next_seat(self.dealer_index, active_seats)
-        small_blind_seat = self._next_seat(self.dealer_index, active_seats)
-        big_blind_seat = self._next_seat(small_blind_seat, active_seats)
+        if len(active_seats) == 2:
+            small_blind_seat = self.dealer_index
+            big_blind_seat = self._next_seat(self.dealer_index, active_seats)
+        else:
+            small_blind_seat = self._next_seat(self.dealer_index, active_seats)
+            big_blind_seat = self._next_seat(small_blind_seat, active_seats)
 
         small_amount = self._post_blind(small_blind_seat, self.small_blind)
         big_amount = self._post_blind(big_blind_seat, self.big_blind)
@@ -139,9 +143,12 @@ class WebPokerGame:
         )
 
         actionable = self._actionable_seats()
-        self.current_turn_index = (
-            self._next_seat(big_blind_seat, actionable) if actionable else big_blind_seat
-        )
+        if len(active_seats) == 2:
+            self.current_turn_index = self.dealer_index
+        else:
+            self.current_turn_index = (
+                self._next_seat(big_blind_seat, actionable) if actionable else big_blind_seat
+            )
         self._run_until_human()
 
     def take_human_action(self, action: str, raise_to: int | None = None) -> None:
