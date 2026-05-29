@@ -16,6 +16,14 @@ from player import Player
 from table import Table
 
 STARTING_CHIPS = 1_000
+MIN_PLAYERS = 2
+MAX_PLAYERS = 5
+BOT_PROFILES = [
+    ("Ada (Conservative)", "Ada", 0.7, 0.3, 0.1),
+    ("Grace (Aggressive)", "Grace", 0.2, 0.9, 0.4),
+    ("Charlie (Balanced)", "Charlie", 0.5, 0.6, 0.2),
+    ("Zara (Bluffer)", "Zara", 0.1, 0.8, 0.5),
+]
 GAMES: dict[str, "WebPokerGame"] = {}
 BOTS_DIR = Path("bots_data")
 BOTS_DIR.mkdir(exist_ok=True)
@@ -27,27 +35,41 @@ except Exception as e:
     print("Tables might not exist. Will attempt to create on first request.")
 
 
+def _normalize_player_count(raw: int | str | None) -> int:
+    if raw is None:
+        return MAX_PLAYERS
+    try:
+        count = int(raw)
+    except (TypeError, ValueError):
+        return MAX_PLAYERS
+    return max(MIN_PLAYERS, min(count, MAX_PLAYERS))
+
+
 class WebPokerGame:
-    def __init__(self, small_blind: int = 5, big_blind: int = 10) -> None:
+    def __init__(self, small_blind: int = 5, big_blind: int = 10, num_players: int = 5) -> None:
+        num_players = _normalize_player_count(num_players)
         self.small_blind = small_blind
         self.big_blind = big_blind
-        self.players = [
-            Player("You", chips=STARTING_CHIPS, is_human=True),
-            Player("Ada (Conservative)", chips=STARTING_CHIPS),
-            Player("Grace (Aggressive)", chips=STARTING_CHIPS),
-            Player("Charlie (Balanced)", chips=STARTING_CHIPS),
-            Player("Zara (Bluffer)", chips=STARTING_CHIPS),
-        ]
-        self.bot_learners = [
-            None,
-            BotLearner("Ada", tightness=0.7, aggression=0.3, bluff_rate=0.1),
-            BotLearner("Grace", tightness=0.2, aggression=0.9, bluff_rate=0.4),
-            BotLearner("Charlie", tightness=0.5, aggression=0.6, bluff_rate=0.2),
-            BotLearner("Zara", tightness=0.1, aggression=0.8, bluff_rate=0.5),
-        ]
-        for i in range(1, 5):
-            name = self.bot_learners[i].name.lower()
-            self.bot_learners[i].load(BOTS_DIR / f"{name}_bot.json")
+        self.players = [Player("You", chips=STARTING_CHIPS, is_human=True)]
+        self.bot_learners: list[BotLearner | None] = [None]
+        for player_name, learner_name, tightness, aggression, bluff_rate in BOT_PROFILES[
+            : max(0, num_players - 1)
+        ]:
+            self.players.append(Player(player_name, chips=STARTING_CHIPS))
+            self.bot_learners.append(
+                BotLearner(
+                    learner_name,
+                    tightness=tightness,
+                    aggression=aggression,
+                    bluff_rate=bluff_rate,
+                )
+            )
+
+        for learner in self.bot_learners[1:]:
+            if learner is None:
+                continue
+            name = learner.name.lower()
+            learner.load(BOTS_DIR / f"{name}_bot.json")
 
         self.table = Table()
         self.evaluator = HandEvaluator()
@@ -311,6 +333,7 @@ class WebPokerGame:
         self.table.pot = 0
 
         self._learn_from_hand(winners)
+        self._save_hand_stats(winners)
 
         self.hand_over = True
         self.awaiting_human = False
@@ -331,6 +354,7 @@ class WebPokerGame:
         self.table.pot = 0
 
         self._learn_from_hand(active)
+        self._save_hand_stats(active)
 
         self.hand_over = True
         self.awaiting_human = False
@@ -343,7 +367,6 @@ class WebPokerGame:
         if human.chips <= 0:
             self.game_over = True
             self.add_message("You are out of chips. Start a new game to continue.")
-            self._save_player_stats(human, False)
             return
         if not live:
             self.game_over = True
@@ -353,8 +376,6 @@ class WebPokerGame:
             self.game_over = True
             winner = self.players[live[0]]
             self.add_message(f"{winner.name} wins the match.")
-            is_human_winner = (live[0] == 0)
-            self._save_player_stats(human, is_human_winner)
 
     def _bot_decision(self, player: Player, call_amount: int) -> tuple[str, int | None]:
         seat = self.players.index(player)
@@ -426,8 +447,10 @@ class WebPokerGame:
         return min(0.99, base + (rank.tiebreakers[0] / 100))
 
     def _learn_from_hand(self, winners: list[int]) -> None:
-        for seat in range(1, 5):
+        for seat in range(1, len(self.players)):
             learner = self.bot_learners[seat]
+            if learner is None:
+                continue
             if seat in winners:
                 reward = (self.players[seat].chips - self.hand_initial_chips[seat]) / 100.0
                 reward = max(1.0, min(reward, 10.0))
@@ -439,9 +462,17 @@ class WebPokerGame:
 
             learner.save(BOTS_DIR / f"{learner.name.lower()}_bot.json")
 
-    def _save_player_stats(self, player: Player, is_winner: bool) -> None:
-        chips_change = player.chips - STARTING_CHIPS
-        save_game_result(player.name, is_winner, chips_change)
+    def _save_player_stats(
+        self, player: Player, is_winner: bool, chips_change: int | None = None
+    ) -> None:
+        resolved_change = chips_change if chips_change is not None else (player.chips - STARTING_CHIPS)
+        save_game_result(player.name, is_winner, resolved_change)
+
+    def _save_hand_stats(self, winners: list[int]) -> None:
+        human = self.players[0]
+        chips_change = human.chips - self.hand_initial_chips[0]
+        is_human_winner = 0 in winners
+        self._save_player_stats(human, is_human_winner, chips_change)
 
     def _post_blind(self, seat: int, blind_amount: int) -> int:
         player = self.players[seat]
@@ -514,6 +545,7 @@ TEMPLATE = """
     td, th { border: 1px solid #2d3a52; padding: 8px; text-align: left; }
     button { padding: 8px 12px; margin-right: 8px; }
     input[type=number] { padding: 6px; width: 110px; }
+    select { padding: 6px; }
     .muted { color: #9fb0d8; }
     .stack { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
     ul { max-height: 260px; overflow: auto; }
@@ -551,9 +583,23 @@ TEMPLATE = """
   {%- endmacro %}
 
   {% if not game %}
-    <form method="post" action="{{ url_for('new_game') }}">
-      <button type="submit">Start New Game</button>
-    </form>
+    <div class="card">
+      <h2>Start Game</h2>
+      <form method="post" action="{{ url_for('new_game') }}">
+        <label for="player-count"><strong>Players</strong> (including you)</label><br />
+        <select id="player-count" name="player_count">
+          {% for count in player_counts %}
+            <option value="{{ count }}" {% if count == selected_count %}selected{% endif %}>
+              {{ count }}
+            </option>
+          {% endfor %}
+        </select>
+        <button type="submit">Start New Game</button>
+      </form>
+      <p class="muted">
+        You will play against {{ selected_count - 1 }} bot{{ '' if selected_count - 1 == 1 else 's' }}.
+      </p>
+    </div>
   {% else %}
     <div class="card">
       <div><strong>Hand:</strong> {{ game.hand_number }} | <strong>Street:</strong> {{ game.street|upper }} | <strong>Pot:</strong> {{ game.table.pot }}</div>
@@ -649,12 +695,22 @@ def _get_current_game() -> WebPokerGame | None:
 def index():
     game = _get_current_game()
     options = game.human_options() if game else None
-    return render_template_string(TEMPLATE, game=game, options=options)
+    selected_count = _normalize_player_count(session.get("player_count"))
+    return render_template_string(
+        TEMPLATE,
+        game=game,
+        options=options,
+        player_counts=range(MIN_PLAYERS, MAX_PLAYERS + 1),
+        selected_count=selected_count,
+    )
 
 
 @app.post("/new-game")
 def new_game():
-    game = WebPokerGame()
+    raw_count = request.form.get("player_count") or session.get("player_count")
+    player_count = _normalize_player_count(raw_count)
+    session["player_count"] = player_count
+    game = WebPokerGame(num_players=player_count)
     game_id = str(uuid4())
     GAMES[game_id] = game
     session["game_id"] = game_id
