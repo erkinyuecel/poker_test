@@ -53,41 +53,76 @@ def init_db() -> None:
     """Initialize database schema."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
-        cursor.execute("""
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS players (
-                name TEXT PRIMARY KEY,
+                leaderboard_id TEXT NOT NULL,
+                name TEXT NOT NULL,
                 wins INTEGER DEFAULT 0,
                 losses INTEGER DEFAULT 0,
                 total_chips_won INTEGER DEFAULT 0,
                 hands_played INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (leaderboard_id, name)
             )
-        """)
-        
-        cursor.execute("""
+        """
+        )
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS game_results (
                 id BIGSERIAL PRIMARY KEY,
-                player_name TEXT REFERENCES players(name),
+                leaderboard_id TEXT NOT NULL,
+                player_name TEXT NOT NULL,
                 is_winner BOOLEAN,
                 chips_change INTEGER,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        
+        """
+        )
+
+        cursor.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS leaderboard_id TEXT")
+        cursor.execute("UPDATE players SET leaderboard_id = 'global' WHERE leaderboard_id IS NULL")
+        cursor.execute("ALTER TABLE players ALTER COLUMN leaderboard_id SET NOT NULL")
+
+        cursor.execute("ALTER TABLE game_results ADD COLUMN IF NOT EXISTS leaderboard_id TEXT")
+        cursor.execute("UPDATE game_results SET leaderboard_id = 'global' WHERE leaderboard_id IS NULL")
+        cursor.execute("ALTER TABLE game_results ALTER COLUMN leaderboard_id SET NOT NULL")
+        cursor.execute("ALTER TABLE game_results DROP CONSTRAINT IF EXISTS game_results_player_name_fkey")
+        cursor.execute("ALTER TABLE game_results DROP CONSTRAINT IF EXISTS game_results_player_fkey")
+
+        cursor.execute("ALTER TABLE players DROP CONSTRAINT IF EXISTS players_pkey")
+        cursor.execute("ALTER TABLE players ADD PRIMARY KEY (leaderboard_id, name)")
+        cursor.execute(
+            """
+            ALTER TABLE game_results
+            ADD CONSTRAINT game_results_player_fkey
+            FOREIGN KEY (leaderboard_id, player_name)
+                REFERENCES players(leaderboard_id, name)
+        """
+        )
+
         conn.commit()
         print("✓ Database tables initialized")
 
 
-def get_player_stats(name: str) -> dict:
+def get_player_stats(leaderboard_id: str, name: str) -> dict:
     """Get player statistics."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
-        cursor.execute("SELECT * FROM players WHERE name = %s", (name,))
+
+        cursor.execute(
+            """
+            SELECT name, wins, losses, total_chips_won, hands_played
+            FROM players
+            WHERE leaderboard_id = %s AND name = %s
+        """,
+            (leaderboard_id, name),
+        )
         row = cursor.fetchone()
-    
+
     if not row:
         return {
             "name": name,
@@ -97,11 +132,11 @@ def get_player_stats(name: str) -> dict:
             "hands_played": 0,
             "win_rate": 0.0,
         }
-    
-    name, wins, losses, total_chips_won, hands_played, _, _ = row
+
+    name, wins, losses, total_chips_won, hands_played = row
     total = wins + losses
     win_rate = (wins / total * 100) if total > 0 else 0.0
-    
+
     return {
         "name": name,
         "wins": wins,
@@ -112,56 +147,77 @@ def get_player_stats(name: str) -> dict:
     }
 
 
-def save_game_result(player_name: str, is_winner: bool, chips_change: int) -> None:
+def save_game_result(
+    leaderboard_id: str, player_name: str, is_winner: bool, chips_change: int
+) -> None:
     """Save game result for player."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
-        cursor.execute("INSERT INTO players (name) VALUES (%s) ON CONFLICT DO NOTHING", (player_name,))
-        
+
+        cursor.execute(
+            """
+            INSERT INTO players (leaderboard_id, name)
+            VALUES (%s, %s)
+            ON CONFLICT (leaderboard_id, name) DO NOTHING
+        """,
+            (leaderboard_id, player_name),
+        )
+
         if is_winner:
-            cursor.execute("""
-                UPDATE players 
-                SET wins = wins + 1, 
+            cursor.execute(
+                """
+                UPDATE players
+                SET wins = wins + 1,
                     total_chips_won = total_chips_won + %s,
                     hands_played = hands_played + 1,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE name = %s
-            """, (chips_change, player_name))
+                WHERE leaderboard_id = %s AND name = %s
+            """,
+                (chips_change, leaderboard_id, player_name),
+            )
         else:
-            cursor.execute("""
-                UPDATE players 
+            cursor.execute(
+                """
+                UPDATE players
                 SET losses = losses + 1,
                     total_chips_won = total_chips_won + %s,
                     hands_played = hands_played + 1,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE name = %s
-            """, (chips_change, player_name))
-        
+                WHERE leaderboard_id = %s AND name = %s
+            """,
+                (chips_change, leaderboard_id, player_name),
+            )
+
         cursor.execute(
-            "INSERT INTO game_results (player_name, is_winner, chips_change) VALUES (%s, %s, %s)",
-            (player_name, is_winner, chips_change)
+            """
+            INSERT INTO game_results (leaderboard_id, player_name, is_winner, chips_change)
+            VALUES (%s, %s, %s, %s)
+        """,
+            (leaderboard_id, player_name, is_winner, chips_change),
         )
-        
+
         conn.commit()
 
 
-def get_leaderboard() -> list[dict]:
+def get_leaderboard(leaderboard_id: str) -> list[dict]:
     """Get top players by win rate."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
-        cursor.execute("""
+
+        cursor.execute(
+            """
             SELECT name, wins, losses, total_chips_won, hands_played,
                    CAST(wins AS FLOAT) / (wins + losses) * 100 as win_rate
             FROM players
-            WHERE hands_played >= 1
+            WHERE leaderboard_id = %s AND hands_played >= 1
             ORDER BY win_rate DESC, hands_played DESC
             LIMIT 20
-        """)
-        
+        """,
+            (leaderboard_id,),
+        )
+
         rows = cursor.fetchall()
-    
+
     return [
         {
             "name": row[0],

@@ -7,6 +7,7 @@ from random import random
 from uuid import uuid4
 
 from flask import Flask, redirect, render_template_string, request, session, url_for
+from psycopg2 import Error as DatabaseError
 
 from bot_learner import BotLearner
 from cards import Deck
@@ -18,6 +19,7 @@ from table import Table
 STARTING_CHIPS = 1_000
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
+MAX_PLAYER_NAME_LEN = 24
 BOT_PROFILES = [
     ("Ada (Conservative)", "Ada", 0.7, 0.3, 0.1),
     ("Grace (Aggressive)", "Grace", 0.2, 0.9, 0.4),
@@ -45,12 +47,34 @@ def _normalize_player_count(raw: int | str | None) -> int:
     return max(MIN_PLAYERS, min(count, MAX_PLAYERS))
 
 
+def _normalize_player_name(raw: str | None) -> str:
+    if raw is None:
+        return ""
+    name = raw.strip()
+    if not name:
+        return ""
+    return name[:MAX_PLAYER_NAME_LEN]
+
+
+def _leaderboard_id_from_name(name: str) -> str:
+    normalized = _normalize_player_name(name)
+    return (normalized.lower() or "anonymous")[:MAX_PLAYER_NAME_LEN]
+
+
 class WebPokerGame:
-    def __init__(self, small_blind: int = 5, big_blind: int = 10, num_players: int = 5) -> None:
+    def __init__(
+        self,
+        small_blind: int = 5,
+        big_blind: int = 10,
+        num_players: int = 5,
+        human_name: str = "Player",
+    ) -> None:
         num_players = _normalize_player_count(num_players)
         self.small_blind = small_blind
         self.big_blind = big_blind
-        self.players = [Player("You", chips=STARTING_CHIPS, is_human=True)]
+        normalized_name = _normalize_player_name(human_name) or "Player"
+        self.leaderboard_id = _leaderboard_id_from_name(normalized_name)
+        self.players = [Player(normalized_name, chips=STARTING_CHIPS, is_human=True)]
         self.bot_learners: list[BotLearner | None] = [None]
         for player_name, learner_name, tightness, aggression, bluff_rate in BOT_PROFILES[
             : max(0, num_players - 1)
@@ -473,13 +497,13 @@ class WebPokerGame:
         self, player: Player, is_winner: bool, chips_change: int | None = None
     ) -> None:
         resolved_change = chips_change if chips_change is not None else (player.chips - STARTING_CHIPS)
-        save_game_result(player.name, is_winner, resolved_change)
+        save_game_result(self.leaderboard_id, player.name, is_winner, resolved_change)
 
     def _save_hand_stats(self, winners: list[int]) -> None:
-        human = self.players[0]
-        chips_change = human.chips - self.hand_initial_chips[0]
-        is_human_winner = 0 in winners
-        self._save_player_stats(human, is_human_winner, chips_change)
+        for seat, player in enumerate(self.players):
+            chips_change = player.chips - self.hand_initial_chips[seat]
+            is_winner = seat in winners
+            self._save_player_stats(player, is_winner, chips_change)
 
     def _post_blind(self, seat: int, blind_amount: int) -> int:
         player = self.players[seat]
@@ -551,7 +575,7 @@ TEMPLATE = """
     table { border-collapse: collapse; width: 100%; margin-top: 10px; }
     td, th { border: 1px solid #2d3a52; padding: 8px; text-align: left; }
     button { padding: 8px 12px; margin-right: 8px; }
-    input[type=number] { padding: 6px; width: 110px; }
+    input[type=number], input[type=text] { padding: 6px; width: 180px; }
     select { padding: 6px; }
     .muted { color: #9fb0d8; }
     .stack { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -593,6 +617,20 @@ TEMPLATE = """
     <div class="card">
       <h2>Start Game</h2>
       <form method="post" action="{{ url_for('new_game') }}">
+        <label for="player-name"><strong>Name</strong></label><br />
+        <input
+          id="player-name"
+          name="player_name"
+          type="text"
+          maxlength="{{ max_name_len }}"
+          value="{{ player_name }}"
+          placeholder="Enter your name"
+          required
+        />
+        {% if name_error %}
+          <p class="muted">{{ name_error }}</p>
+        {% endif %}
+        <br />
         <label for="player-count"><strong>Players</strong> (including you)</label><br />
         <select id="player-count" name="player_count">
           {% for count in player_counts %}
@@ -686,7 +724,9 @@ TEMPLATE = """
 
   <div class="card">
     <strong>Your Stats</strong>
-    {% if stats_error %}
+    {% if not player_name %}
+      <p class="muted">Set your name to see your stats.</p>
+    {% elif stats_error %}
       <p class="muted">Stats unavailable: {{ stats_error }}</p>
     {% elif stats %}
       <table>
@@ -710,8 +750,10 @@ TEMPLATE = """
   </div>
 
   <div class="card">
-    <strong>Leaderboard</strong>
-    {% if stats_error %}
+    <strong>Leaderboard{% if player_name %} — {{ player_name }}{% endif %}</strong>
+    {% if not player_name %}
+      <p class="muted">Set your name to see your leaderboard.</p>
+    {% elif stats_error %}
       <p class="muted">Leaderboard unavailable: {{ stats_error }}</p>
     {% elif leaderboard %}
       <table>
@@ -756,14 +798,21 @@ def index():
         game._run_until_human()
     options = game.human_options() if game else None
     selected_count = _normalize_player_count(session.get("player_count"))
-    player_name = game.players[0].name if game else "You"
+    if game:
+        player_name = game.players[0].name
+        session["player_name"] = player_name
+    else:
+        player_name = _normalize_player_name(session.get("player_name"))
     stats = None
     leaderboard = []
     stats_error = None
+    name_error = session.pop("name_error", None)
     try:
-        stats = get_player_stats(player_name)
-        leaderboard = get_leaderboard()
-    except Exception as exc:
+        if player_name:
+            leaderboard_id = _leaderboard_id_from_name(player_name)
+            stats = get_player_stats(leaderboard_id, player_name)
+            leaderboard = get_leaderboard(leaderboard_id)
+    except (RuntimeError, DatabaseError) as exc:
         stats_error = str(exc)
     return render_template_string(
         TEMPLATE,
@@ -771,18 +820,28 @@ def index():
         options=options,
         player_counts=range(MIN_PLAYERS, MAX_PLAYERS + 1),
         selected_count=selected_count,
+        player_name=player_name,
+        max_name_len=MAX_PLAYER_NAME_LEN,
         stats=stats,
         leaderboard=leaderboard,
         stats_error=stats_error,
+        name_error=name_error,
     )
 
 
 @app.post("/new-game")
 def new_game():
     raw_count = request.form.get("player_count") or session.get("player_count")
+    raw_name = request.form.get("player_name") or session.get("player_name")
     player_count = _normalize_player_count(raw_count)
+    player_name = _normalize_player_name(raw_name)
+    if not player_name:
+        session["name_error"] = "Name is required."
+        session["player_name"] = ""
+        return redirect(url_for("index"))
     session["player_count"] = player_count
-    game = WebPokerGame(num_players=player_count)
+    session["player_name"] = player_name
+    game = WebPokerGame(num_players=player_count, human_name=player_name)
     game_id = str(uuid4())
     GAMES[game_id] = game
     session["game_id"] = game_id
