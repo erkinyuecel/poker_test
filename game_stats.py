@@ -13,6 +13,12 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 DATABASE_FORCE_IPV4 = os.getenv("DATABASE_FORCE_IPV4", "").lower() in {"1", "true", "yes"}
 DATABASE_HOSTADDR = os.getenv("DATABASE_HOSTADDR")
+LEGACY_BOT_NAMES = (
+    "Ada (Conservative)",
+    "Grace (Aggressive)",
+    "Charlie (Balanced)",
+    "Zara (Bluffer)",
+)
 
 
 def _resolve_ipv4_hostaddr(database_url: str) -> str:
@@ -63,6 +69,7 @@ def init_db() -> None:
                 losses INTEGER DEFAULT 0,
                 total_chips_won INTEGER DEFAULT 0,
                 hands_played INTEGER DEFAULT 0,
+                is_bot BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (leaderboard_id, name)
@@ -86,6 +93,15 @@ def init_db() -> None:
         cursor.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS leaderboard_id TEXT")
         cursor.execute("UPDATE players SET leaderboard_id = 'global' WHERE leaderboard_id IS NULL")
         cursor.execute("ALTER TABLE players ALTER COLUMN leaderboard_id SET NOT NULL")
+        cursor.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS is_bot BOOLEAN DEFAULT FALSE")
+        cursor.execute(
+            """
+            UPDATE players
+            SET is_bot = TRUE
+            WHERE leaderboard_id = 'global' AND name = ANY(%s)
+        """,
+            (list(LEGACY_BOT_NAMES),),
+        )
 
         cursor.execute("ALTER TABLE game_results ADD COLUMN IF NOT EXISTS leaderboard_id TEXT")
         cursor.execute("UPDATE game_results SET leaderboard_id = 'global' WHERE leaderboard_id IS NULL")
@@ -106,6 +122,24 @@ def init_db() -> None:
 
         conn.commit()
         print("✓ Database tables initialized")
+
+
+def ensure_player(leaderboard_id: str, name: str) -> None:
+    """Ensure a player exists for the leaderboard."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO players (leaderboard_id, name, is_bot)
+            VALUES (%s, %s, FALSE)
+            ON CONFLICT (leaderboard_id, name)
+            DO UPDATE SET is_bot = FALSE
+        """,
+            (leaderboard_id, name),
+        )
+
+        conn.commit()
 
 
 def get_player_stats(leaderboard_id: str, name: str) -> dict:
@@ -207,13 +241,44 @@ def get_leaderboard(leaderboard_id: str) -> list[dict]:
         cursor.execute(
             """
             SELECT name, wins, losses, total_chips_won, hands_played,
-                   CAST(wins AS FLOAT) / (wins + losses) * 100 as win_rate
+                   COALESCE(CAST(wins AS FLOAT) / NULLIF(wins + losses, 0) * 100, 0) as win_rate
             FROM players
-            WHERE leaderboard_id = %s AND hands_played >= 1
-            ORDER BY win_rate DESC, hands_played DESC
+            WHERE leaderboard_id = %s AND NOT is_bot
+            ORDER BY win_rate DESC, hands_played DESC, name ASC
             LIMIT 20
         """,
             (leaderboard_id,),
+        )
+
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "name": row[0],
+            "wins": row[1],
+            "losses": row[2],
+            "total_chips_won": row[3],
+            "hands_played": row[4],
+            "win_rate": row[5] or 0.0,
+        }
+        for row in rows
+    ]
+
+
+def get_global_leaderboard() -> list[dict]:
+    """Get top players by win rate across all leaderboards."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT name, wins, losses, total_chips_won, hands_played,
+                   COALESCE(CAST(wins AS FLOAT) / NULLIF(wins + losses, 0) * 100, 0) as win_rate
+            FROM players
+            WHERE NOT is_bot
+            ORDER BY win_rate DESC, hands_played DESC, name ASC
+            LIMIT 20
+        """
         )
 
         rows = cursor.fetchall()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from random import random
+from random import random, sample
 from uuid import uuid4
 
 from flask import Flask, redirect, render_template_string, request, session, url_for
@@ -12,7 +12,13 @@ from psycopg2 import Error as DatabaseError
 from bot_learner import BotLearner
 from cards import Deck
 from evaluator import HandCategory, HandEvaluator
-from game_stats import init_db, save_game_result, get_player_stats, get_leaderboard
+from game_stats import (
+    ensure_player,
+    get_global_leaderboard,
+    get_player_stats,
+    init_db,
+    save_game_result,
+)
 from player import Player
 from table import Table
 
@@ -20,11 +26,49 @@ STARTING_CHIPS = 1_000
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
 MAX_PLAYER_NAME_LEN = 24
-BOT_PROFILES = [
-    ("Ada (Conservative)", "Ada", 0.7, 0.3, 0.1),
-    ("Grace (Aggressive)", "Grace", 0.2, 0.9, 0.4),
-    ("Charlie (Balanced)", "Charlie", 0.5, 0.6, 0.2),
-    ("Zara (Bluffer)", "Zara", 0.1, 0.8, 0.5),
+BOT_FIRST_NAMES = [
+    "Alex",
+    "Avery",
+    "Blake",
+    "Casey",
+    "Cody",
+    "Drew",
+    "Elliot",
+    "Emery",
+    "Hayden",
+    "Jamie",
+    "Jordan",
+    "Kai",
+    "Logan",
+    "Morgan",
+    "Parker",
+    "Quinn",
+    "Reese",
+    "Riley",
+    "Rowan",
+    "Skyler",
+]
+BOT_LAST_NAMES = [
+    "Stone",
+    "Rivers",
+    "Fox",
+    "Blaze",
+    "Frost",
+    "Reed",
+    "Vale",
+    "Storm",
+    "Cross",
+    "Vance",
+]
+BOT_NAME_POOL = [f"{first} {last}" for first in BOT_FIRST_NAMES for last in BOT_LAST_NAMES]
+BOT_PERSONALITIES = [
+    {"key": "maniac", "tightness": 0.0, "aggression": 3.0, "bluff_rate": 0.9, "all_in_rate": 0.2},
+    {"key": "overbet", "tightness": 0.1, "aggression": 2.2, "bluff_rate": 0.6, "all_in_rate": 0.1},
+    {"key": "bluffer", "tightness": 0.2, "aggression": 1.6, "bluff_rate": 0.75},
+    {"key": "nit", "tightness": 0.9, "aggression": 0.2, "bluff_rate": 0.02},
+    {"key": "caller", "tightness": 0.05, "aggression": 0.05, "bluff_rate": 0.05},
+    {"key": "steady", "tightness": 0.6, "aggression": 0.6, "bluff_rate": 0.15},
+    {"key": "gambler", "tightness": 0.15, "aggression": 1.4, "bluff_rate": 0.5},
 ]
 GAMES: dict[str, "WebPokerGame"] = {}
 BOTS_DIR = Path("bots_data")
@@ -76,18 +120,28 @@ class WebPokerGame:
         self.leaderboard_id = _leaderboard_id_from_name(normalized_name)
         self.players = [Player(normalized_name, chips=STARTING_CHIPS, is_human=True)]
         self.bot_learners: list[BotLearner | None] = [None]
-        for player_name, learner_name, tightness, aggression, bluff_rate in BOT_PROFILES[
-            : max(0, num_players - 1)
-        ]:
-            self.players.append(Player(player_name, chips=STARTING_CHIPS))
+        self.bot_all_in_rates: list[float] = [0.0]
+        bot_count = max(0, num_players - 1)
+        available_names = [name for name in BOT_NAME_POOL if name != normalized_name]
+        bot_names = sample(available_names, k=bot_count) if bot_count else []
+        personalities = []
+        if bot_count:
+            personalities.append(BOT_PERSONALITIES[0])
+            if bot_count > 1:
+                personalities.extend(sample(BOT_PERSONALITIES[1:], k=bot_count - 1))
+        for bot_index in range(bot_count):
+            profile = personalities[bot_index]
+            bot_name = bot_names[bot_index]
+            self.players.append(Player(bot_name, chips=STARTING_CHIPS))
             self.bot_learners.append(
                 BotLearner(
-                    learner_name,
-                    tightness=tightness,
-                    aggression=aggression,
-                    bluff_rate=bluff_rate,
+                    profile["key"],
+                    tightness=profile["tightness"],
+                    aggression=profile["aggression"],
+                    bluff_rate=profile["bluff_rate"],
                 )
             )
+            self.bot_all_in_rates.append(profile.get("all_in_rate", 0.0))
 
         for learner in self.bot_learners[1:]:
             if learner is None:
@@ -415,8 +469,8 @@ class WebPokerGame:
         strength = self._estimate_strength(player)
         
         # Apply personality to strength
-        strength -= (learner.tightness * 0.15)  # Tight bots fold weaker hands
-        strength += (learner.aggression * 0.1)  # Aggressive bots play stronger hands
+        strength -= (learner.tightness * 0.2)  # Tight bots fold weaker hands
+        strength += (learner.aggression * 0.2)  # Aggressive bots play stronger hands
         strength = max(0.0, min(1.0, strength))
         
         # Bluff chance
@@ -428,6 +482,15 @@ class WebPokerGame:
 
         state = learner.discretize_state(strength, pot_odds, stack_pressure)
         valid_actions = ["fold", "call", "raise"] if call_amount > 0 else ["check", "raise"]
+        if learner.aggression >= 1.2:
+            valid_actions = ["raise", "call", "fold"] if call_amount > 0 else ["raise", "check"]
+        all_in_rate = self.bot_all_in_rates[seat] if seat < len(self.bot_all_in_rates) else 0.0
+        if all_in_rate > 0 and "raise" in valid_actions:
+            min_total = self.current_bet + self.big_blind
+            max_total = player.current_bet + player.chips
+            if max_total >= min_total and random() < all_in_rate:
+                learner.record_action(state, "raise")
+                return "raise", max_total
 
         action = learner.get_action(state, valid_actions)
         learner.record_action(state, action)
@@ -500,10 +563,10 @@ class WebPokerGame:
         save_game_result(self.leaderboard_id, player.name, is_winner, resolved_change)
 
     def _save_hand_stats(self, winners: list[int]) -> None:
-        for seat, player in enumerate(self.players):
-            chips_change = player.chips - self.hand_initial_chips[seat]
-            is_winner = seat in winners
-            self._save_player_stats(player, is_winner, chips_change)
+        human = self.players[0]
+        chips_change = human.chips - self.hand_initial_chips[0]
+        is_human_winner = 0 in winners
+        self._save_player_stats(human, is_human_winner, chips_change)
 
     def _post_blind(self, seat: int, blind_amount: int) -> int:
         player = self.players[seat]
@@ -750,7 +813,7 @@ TEMPLATE = """
   </div>
 
   <div class="card">
-    <strong>Leaderboard{% if player_name %} — {{ player_name }}{% endif %}</strong>
+    <strong>Leaderboard</strong>
     {% if not player_name %}
       <p class="muted">Set your name to see your leaderboard.</p>
     {% elif stats_error %}
@@ -810,8 +873,9 @@ def index():
     try:
         if player_name:
             leaderboard_id = _leaderboard_id_from_name(player_name)
+            ensure_player(leaderboard_id, player_name)
             stats = get_player_stats(leaderboard_id, player_name)
-            leaderboard = get_leaderboard(leaderboard_id)
+            leaderboard = get_global_leaderboard()
     except (RuntimeError, DatabaseError) as exc:
         stats_error = str(exc)
     return render_template_string(
