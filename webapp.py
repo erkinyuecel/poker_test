@@ -895,8 +895,13 @@ def index():
 
 @app.post("/new-game")
 def new_game():
-    raw_count = request.form.get("player_count") or session.get("player_count")
+    raw_count = request.form.get("player_count")
     raw_name = request.form.get("player_name") or session.get("player_name")
+    if raw_count is None:
+        game_id = session.pop("game_id", None)
+        if game_id:
+            GAMES.pop(game_id, None)
+        return redirect(url_for("index"))
     player_count = _normalize_player_count(raw_count)
     player_name = _normalize_player_name(raw_name)
     if not player_name:
