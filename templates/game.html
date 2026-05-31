@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Texas Hold'em</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, sans-serif;
+      background: #0e0805;
+      background-image: radial-gradient(ellipse at 50% 0%, #2a1508 0%, transparent 65%);
+      color: #f0e4c8;
+      min-height: 100vh;
+    }
+
+    .page { max-width: 900px; margin: 0 auto; padding: 12px; }
+
+    /* ── HEADER ── */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      background: linear-gradient(90deg, #1e1008, #2c1c10, #1e1008);
+      border: 1px solid #5c3a1e; border-radius: 12px;
+      padding: 10px 18px; margin-bottom: 10px;
+      box-shadow: 0 2px 14px rgba(0,0,0,.65);
+    }
+    .header-brand {
+      font-size: 19px; font-weight: 900; color: #e0b030;
+      text-shadow: 0 0 22px rgba(224,176,48,.5); letter-spacing: .3px;
+    }
+    .header-info { display: flex; gap: 12px; align-items: center; font-size: 13px; }
+
+    .sp {
+      padding: 4px 12px; border-radius: 20px; font-weight: 700;
+      font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .sp-preflop  { background:#0c2040; color:#7ab8ff; border:1px solid #1a4080; }
+    .sp-flop     { background:#0a2c16; color:#60d490; border:1px solid #1a5830; }
+    .sp-turn     { background:#281e04; color:#d4b050; border:1px solid #584410; }
+    .sp-river    { background:#280c0c; color:#e09090; border:1px solid #581818; }
+    .sp-finished { background:#141424; color:#9090c8; border:1px solid #2c2c58; }
+    .sp-waiting  { background:#121212; color:#606070; border:1px solid #2c2c38; }
+
+    /* ── WOOD FRAME ── */
+    .wood-frame {
+      background: linear-gradient(145deg, #a87040 0%, #7a4e28 25%, #a07038 50%, #5c3a1e 75%, #8c5c30 100%);
+      border-radius: 34px; padding: 10px;
+      box-shadow: 0 12px 60px rgba(0,0,0,.85),
+                  inset 0 1px 0 rgba(255,255,255,.18),
+                  inset 0 -2px 6px rgba(0,0,0,.45);
+      margin-bottom: 10px;
+    }
+
+    /* ── FELT ── */
+    .felt {
+      background: radial-gradient(ellipse at 50% 30%, #408a54 0%, #2d6a3e 55%, #1e4c2c 100%);
+      border-radius: 26px; padding: 18px 16px 14px;
+      box-shadow: inset 0 0 70px rgba(0,0,0,.35);
+    }
+
+    /* ── BOTS ── */
+    .bots-row {
+      display: flex; gap: 12px; justify-content: center;
+      flex-wrap: wrap; margin-bottom: 14px;
+    }
+
+    /* ── SEAT ── */
+    .seat { position: relative; display: flex; flex-direction: column; align-items: center; }
+
+    .seat-card {
+      background: rgba(0,0,0,.45); border: 1.5px solid rgba(255,255,255,.12);
+      border-radius: 14px; padding: 8px 12px; min-width: 98px;
+      text-align: center; transition: border-color .2s, box-shadow .2s;
+      position: relative;
+    }
+    .seat.is-turn .seat-card {
+      border-color: #f0d020;
+      box-shadow: 0 0 18px rgba(240,208,32,.55), 0 0 6px rgba(240,208,32,.3);
+    }
+    .seat.folded .seat-card { opacity: .4; }
+    .seat.out    .seat-card { opacity: .22; }
+
+    /* Avatar */
+    .av {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; font-weight: 800; color: #fff;
+      margin: 0 auto 5px;
+      border: 2px solid rgba(255,255,255,.2);
+      box-shadow: 0 2px 6px rgba(0,0,0,.45);
+    }
+    .av0 { background: linear-gradient(135deg,#c0392b,#962618); }
+    .av1 { background: linear-gradient(135deg,#d35400,#a84300); }
+    .av2 { background: linear-gradient(135deg,#27ae60,#1d8348); }
+    .av3 { background: linear-gradient(135deg,#2980b9,#1c5f8e); }
+    .av4 { background: linear-gradient(135deg,#8e44ad,#6c3483); }
+    .avm { background: linear-gradient(135deg,#e0b030,#b08820); }
+
+    .seat-name  { font-size: 11px; font-weight: 700; color: #f0e4c8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
+    .seat-chips { font-size: 12px; color: #e0b030; font-weight: 700; margin: 2px 0; }
+    .seat-bet   { font-size: 10px; color: #a09070; }
+
+    .sb {
+      display: inline-block; font-size: 9px; font-weight: 700;
+      padding: 1px 7px; border-radius: 10px; margin-top: 3px;
+    }
+    .sb-active { background:#0c3418; color:#58c868; border:1px solid #1c5c30; }
+    .sb-folded { background:#381010; color:#cc5858; border:1px solid #681818; }
+    .sb-allin  { background:#382800; color:#d0b028; border:1px solid #685000; }
+    .sb-out    { background:#181818; color:#484848; border:1px solid #2c2c2c; }
+
+    .d-chip {
+      position: absolute; top: 4px; right: 4px; width: 18px; height: 18px;
+      border-radius: 50%; background: linear-gradient(135deg,#f0d030,#c0a010);
+      color: #111; font-size: 9px; font-weight: 900;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 4px rgba(0,0,0,.5); z-index: 2;
+    }
+
+    /* ── PLAYING CARDS ── */
+    .crow { display: flex; gap: 4px; justify-content: center; margin: 5px 0; }
+
+    .pc {
+      width: 36px; height: 52px; flex-shrink: 0; position: relative;
+      background: #f5f0e2; border-radius: 5px; border: 1px solid #c8b890;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      font-family: Georgia, serif; font-weight: 700;
+    }
+    .pc .r { font-size: 12px; line-height: 1; }
+    .pc .s { font-size: 13px; line-height: 1; }
+    .pc.red { color: #cc2020; }
+    .pc.blk { color: #141820; }
+    .pc.back {
+      background: repeating-linear-gradient(45deg,#1a2a7a 0,#1a2a7a 4px,#2236aa 4px,#2236aa 8px);
+      border-color: #0e1a60;
+    }
+    .pc.back::after { content:''; position:absolute; inset:3px; border:1px solid rgba(255,255,255,.16); border-radius:3px; }
+
+    .slot { width: 36px; height: 52px; flex-shrink: 0; border: 2px dashed rgba(255,255,255,.14); border-radius: 5px; }
+
+    /* Board: larger */
+    .board-crow .pc   { width: 52px; height: 72px; }
+    .board-crow .pc .r { font-size: 16px; }
+    .board-crow .pc .s { font-size: 18px; }
+    .board-crow .slot  { width: 52px; height: 72px; }
+
+    /* Rack: large */
+    .rack-crow .pc   { width: 60px; height: 86px; }
+    .rack-crow .pc .r { font-size: 20px; }
+    .rack-crow .pc .s { font-size: 22px; }
+
+    /* ── BOARD / POT ── */
+    .board-area { display:flex; flex-direction:column; align-items:center; padding: 8px 0; }
+    .board-crow { gap: 8px; }
+
+    .pot-pill {
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 12px;
+      background: rgba(0,0,0,.4); border: 1px solid rgba(255,200,80,.18);
+      border-radius: 24px; padding: 5px 20px;
+      box-shadow: 0 0 16px rgba(224,176,48,.08);
+    }
+    .pot-coin { font-size: 20px; }
+    .pot-num  { font-size: 24px; font-weight: 900; color: #e8bc30; letter-spacing: -0.5px; }
+
+    /* ── DIVIDER ── */
+    .felt-div { border:none; border-top:1px solid rgba(255,255,255,.07); margin: 10px 0; }
+
+    /* ── HUMAN ── */
+    .human-area { display:flex; flex-direction:column; align-items:center; gap:8px; }
+
+    .human-top { display:flex; align-items:center; gap:12px; }
+    .human-av  { width:48px; height:48px; font-size:20px; }
+    .human-meta .hname {
+      font-size: 16px; font-weight: 900; color: #e8bc30; line-height: 1.2;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .human-meta .hchips { font-size: 12px; color: #b09060; margin-top: 3px; }
+
+    /* Card rack (wooden tray) */
+    .rack {
+      background: linear-gradient(to bottom, #9a6038 0%, #7a4620 60%, #5c3214 100%);
+      border-radius: 14px; padding: 10px 18px 16px;
+      box-shadow: 0 4px 18px rgba(0,0,0,.65),
+                  inset 0 1px 0 rgba(255,255,255,.12),
+                  inset 0 -3px 8px rgba(0,0,0,.45);
+      border: 1.5px solid #4a2c10;
+    }
+
+    /* ── ACTIONS ── */
+    .action-zone { width:100%; max-width:560px; margin-top:2px; }
+
+    .abts { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+    .btn {
+      padding: 12px 28px; border: none; border-radius: 10px;
+      font-size: 14px; font-weight: 800; cursor: pointer; letter-spacing: .2px;
+      box-shadow: 0 4px 10px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.18);
+      transition: filter .15s, transform .1s;
+    }
+    .btn:hover  { filter: brightness(1.15); }
+    .btn:active { transform: scale(.96); filter: brightness(.92); }
+    .btn-check { background: linear-gradient(to bottom,#32b866,#248a4a); color:#fff; }
+    .btn-call  { background: linear-gradient(to bottom,#2878e0,#1860c0); color:#fff; }
+    .btn-fold  { background: linear-gradient(to bottom,#c83030,#a01c1c); color:#fff; }
+    .btn-raise { background: linear-gradient(to bottom,#d4940c,#a87008); color:#fff; }
+    .btn-next  { background: linear-gradient(to bottom,#2878e0,#1860c0); color:#fff; }
+    .btn-new   { background: rgba(255,255,255,.09); color:#c8b898; border:1px solid rgba(255,255,255,.14); }
+
+    .raise-box {
+      margin-top: 10px; padding: 12px 14px;
+      background: rgba(0,0,0,.38); border-radius: 10px;
+      border: 1px solid rgba(255,200,80,.1);
+    }
+    .raise-row   { display:flex; gap:10px; align-items:center; margin-bottom:4px; }
+    .raise-sld   { flex:1; accent-color:#e0b030; cursor:pointer; }
+    .raise-inp   {
+      width:84px; padding:7px 8px;
+      background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.15);
+      border-radius:7px; color:#f0e4c8; font-size:14px; font-weight:700; text-align:center;
+    }
+    .raise-lim   { font-size:10px; color:#907050; text-align:center; margin-bottom:6px; }
+    .raise-pre   { display:flex; gap:6px; justify-content:center; margin-bottom:8px; flex-wrap:wrap; }
+    .btn-pre     {
+      padding:5px 14px; background:rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.14); border-radius:6px;
+      color:#c0a878; font-size:12px; font-weight:600; cursor:pointer;
+      transition:background .15s;
+    }
+    .btn-pre:hover { background:rgba(255,255,255,.18); color:#f0e4c8; }
+
+    .waiting-txt { text-align:center; color:#8a7850; font-style:italic; font-size:13px; margin-top:8px; }
+
+    /* ── GAME OVER ── */
+    .over-banner {
+      background:linear-gradient(90deg,#180808,#280e0e,#180808);
+      border:1px solid #6a2020; border-radius:12px;
+      padding:14px 20px; text-align:center; margin-bottom:10px;
+      box-shadow:0 2px 14px rgba(0,0,0,.55);
+    }
+    .over-title { font-size:22px; font-weight:900; color:#d05050; }
+    .over-msg   { font-size:13px; color:#a06060; margin-top:4px; }
+
+    /* ── BOTTOM PANELS ── */
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    @media(max-width:540px){ .grid2{grid-template-columns:1fr;} }
+
+    .panel {
+      background:linear-gradient(135deg,#1c1008,#141008);
+      border:1px solid #4a3018; border-radius:12px; padding:14px;
+      box-shadow:0 2px 12px rgba(0,0,0,.45);
+    }
+    .pttl {
+      font-size:10px; font-weight:700; text-transform:uppercase;
+      letter-spacing:1.5px; color:#907050; margin-bottom:8px;
+      padding-bottom:6px; border-bottom:1px solid #3a2810;
+    }
+    .pttl.mt { margin-top:12px; }
+
+    .log-ul { list-style:none; display:flex; flex-direction:column; gap:3px; max-height:180px; overflow-y:auto; }
+    .log-ul li { font-size:11px; color:#907858; padding:3px 0; border-bottom:1px solid rgba(255,255,255,.04); }
+    .log-ul li:first-child { color:#e8d4a0; font-weight:600; }
+
+    .stbl { width:100%; border-collapse:collapse; font-size:11px; }
+    .stbl th { text-align:left; color:#806840; font-weight:600; padding:2px 5px 6px; border-bottom:1px solid #3a2810; font-size:10px; text-transform:uppercase; letter-spacing:.5px; }
+    .stbl td { padding:5px 5px; border-bottom:1px solid rgba(255,255,255,.04); color:#c8b090; }
+    .stbl tr.hl td { color:#e8c050; font-weight:700; }
+
+    .rk { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%; font-size:10px; font-weight:800; }
+    .rk1{background:#c08010;color:#fff;} .rk2{background:#484858;color:#ccc;} .rk3{background:#6a3020;color:#f0a080;} .rkn{background:#18182a;color:#5060a0;}
+
+    /* ── LANDING ── */
+    .landing  { max-width:400px; margin:48px auto; }
+    .l-logo   { text-align:center; margin-bottom:28px; }
+    .l-icon   { font-size:60px; display:block; filter:drop-shadow(0 0 22px rgba(224,176,48,.5)); margin-bottom:8px; }
+    .l-title  { font-size:34px; font-weight:900; color:#e0b030; letter-spacing:-1px; text-shadow:0 0 32px rgba(224,176,48,.3); }
+    .l-sub    { font-size:13px; color:#806840; margin-top:4px; }
+
+    .fbox {
+      background:linear-gradient(145deg,#1e1208,#141008);
+      border:1px solid #5c3818; border-radius:16px; padding:26px;
+      box-shadow:0 8px 36px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.05);
+    }
+    .frow  { margin-bottom:18px; }
+    .flbl  { display:block; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:#907050; margin-bottom:6px; }
+    .finp  { width:100%; padding:11px 14px; background:rgba(255,255,255,.05); border:1.5px solid #4a3018; border-radius:8px; color:#f0e4c8; font-size:15px; outline:none; transition:border-color .2s; }
+    .finp:focus  { border-color:#e0b030; background:rgba(255,255,255,.08); }
+    .fsel  { width:100%; padding:11px 14px; background:rgba(255,255,255,.05); border:1.5px solid #4a3018; border-radius:8px; color:#f0e4c8; font-size:15px; outline:none; cursor:pointer; }
+    .ferr  { color:#e06060; font-size:12px; margin-top:5px; }
+    .btn-deal {
+      width:100%; padding:14px;
+      background:linear-gradient(to bottom,#e0b030,#b08820);
+      color:#1a0e04; font-size:17px; font-weight:900;
+      border:none; border-radius:10px; cursor:pointer;
+      box-shadow:0 4px 18px rgba(224,176,48,.4), inset 0 1px 0 rgba(255,255,255,.2);
+      transition:filter .15s;
+    }
+    .btn-deal:hover { filter:brightness(1.1); }
+    .l-stats { margin-top:14px; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+{# ── CARD MACRO ── #}
+{% macro C(code, label) -%}
+  {%- if code == "back" -%}
+    <div class="pc back"></div>
+  {%- else -%}
+    {%- set s = code[-1] -%}
+    <div class="pc {{ 'red' if s in ('H','D') else 'blk' }}">
+      <span class="r">{{ code[:-1] }}</span>
+      <span class="s">{{ '♥' if s=='H' else '♦' if s=='D' else '♣' if s=='C' else '♠' }}</span>
+    </div>
+  {%- endif -%}
+{%- endmacro %}
+
+{# ═══════════════ LANDING ═══════════════ #}
+{% if not game %}
+<div class="landing">
+  <div class="l-logo">
+    <span class="l-icon">🃏</span>
+    <div class="l-title">Texas Hold'em</div>
+    <div class="l-sub">Single player vs bots</div>
+  </div>
+
+  <div class="fbox">
+    <form method="post" action="{{ url_for('new_game') }}">
+      <div class="frow">
+        <label class="flbl" for="pn">Your name</label>
+        <input class="finp" id="pn" name="player_name" type="text"
+               maxlength="{{ max_name_len }}" value="{{ player_name }}"
+               placeholder="Enter your name" required autofocus />
+        {% if name_error %}<p class="ferr">{{ name_error }}</p>{% endif %}
+      </div>
+      <div class="frow">
+        <label class="flbl" for="pc">Players at the table</label>
+        <select class="fsel" id="pc" name="player_count">
+          {% for n in player_counts %}
+            <option value="{{ n }}" {{ 'selected' if n == selected_count }}>
+              {{ n }} players — you + {{ n-1 }} bot{{ '' if n-1==1 else 's' }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn-deal" type="submit">🂠&nbsp; Deal Me In</button>
+    </form>
+  </div>
+
+  {% if stats or leaderboard %}
+  <div class="l-stats">
+    {% if stats %}
+    <div class="panel" style="margin-bottom:10px;">
+      <div class="pttl">Your Stats — {{ stats.name }}</div>
+      <table class="stbl">
+        <thead><tr><th>Hands</th><th>Wins</th><th>Win %</th><th>Chips Won</th></tr></thead>
+        <tbody>
+          <tr class="hl">
+            <td>{{ stats.hands_played }}</td><td>{{ stats.wins }}</td>
+            <td>{{ '%.1f'|format(stats.win_rate) }}%</td><td>{{ stats.total_chips_won }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% if leaderboard %}
+    <div class="panel">
+      <div class="pttl">Global Leaderboard</div>
+      <table class="stbl">
+        <thead><tr><th>#</th><th>Name</th><th>Hands</th><th>Win %</th><th>Chips</th></tr></thead>
+        <tbody>
+          {% for row in leaderboard %}
+          <tr {{ 'class="hl"'|safe if stats and row.name|lower == stats.name|lower }}>
+            <td>
+              {% if loop.index==1 %}<span class="rk rk1">1</span>
+              {% elif loop.index==2 %}<span class="rk rk2">2</span>
+              {% elif loop.index==3 %}<span class="rk rk3">3</span>
+              {% else %}<span class="rk rkn">{{ loop.index }}</span>{% endif %}
+            </td>
+            <td>{{ row.name }}</td><td>{{ row.hands_played }}</td>
+            <td>{{ '%.1f'|format(row.win_rate) }}%</td><td>{{ row.total_chips_won }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{# ═══════════════ GAME ═══════════════ #}
+{% else %}
+
+{% if game.game_over %}
+<div class="over-banner">
+  <div class="over-title">Game Over</div>
+  {% if game.messages %}<div class="over-msg">{{ game.messages[-1] }}</div>{% endif %}
+</div>
+{% endif %}
+
+{# Header #}
+<div class="header">
+  <div class="header-brand">🃏 Texas Hold'em</div>
+  <div class="header-info">
+    <span style="color:#a09070;">Hand {{ game.hand_number }}</span>
+    <span class="sp sp-{{ game.street }}">{{ game.street|upper }}</span>
+    <span style="color:#e0b030;font-weight:800;">💰 {{ game.table.pot }}</span>
+  </div>
+</div>
+
+{# Wood frame #}
+<div class="wood-frame">
+<div class="felt">
+
+  {# ── BOTS ── #}
+  {% set bots = game.players[1:] %}
+  {% if bots %}
+  <div class="bots-row">
+    {% for player in bots %}
+    {% set seat   = loop.index %}
+    {% set avcls  = "av" ~ loop.index0 %}
+    {% set isturn = (game.current_turn_index == seat) and not game.hand_over %}
+    <div class="seat {{ 'is-turn' if isturn }} {{ 'folded' if player.folded }} {{ 'out' if player.chips<=0 and not player.hole_cards }}">
+      <div class="seat-card">
+        {% if game.dealer_index == seat %}<div class="d-chip">D</div>{% endif %}
+        <div class="av {{ avcls }}">{{ player.name[0]|upper }}</div>
+        <div class="seat-name">{{ player.name }}</div>
+        <div class="seat-chips">{{ player.chips }}</div>
+        {% if player.current_bet > 0 %}<div class="seat-bet">bet {{ player.current_bet }}</div>{% endif %}
+        <div class="crow">
+          {%- for code, label in game.visible_hole_cards(player) -%}{{ C(code, label) }}{%- endfor -%}
+        </div>
+        {% if player.folded %}<span class="sb sb-folded">Folded</span>
+        {% elif player.chips<=0 and not player.hole_cards %}<span class="sb sb-out">Out</span>
+        {% elif player.chips==0 %}<span class="sb sb-allin">All-in</span>
+        {% else %}<span class="sb sb-active">Active</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# ── BOARD ── #}
+  {% set board = game.visible_board_cards() %}
+  <div class="board-area">
+    <div class="crow board-crow">
+      {%- for code, label in board -%}{{ C(code, label) }}{%- endfor -%}
+      {%- for _ in range(5 - board|length) -%}<div class="slot"></div>{%- endfor -%}
+    </div>
+    <div class="pot-pill">
+      <span class="pot-coin">🪙</span>
+      <span class="pot-num">{{ game.table.pot }}</span>
+    </div>
+  </div>
+
+  <hr class="felt-div" />
+
+  {# ── HUMAN ── #}
+  {% set human = game.players[0] %}
+  <div class="human-area">
+    <div class="human-top">
+      <div class="av avm human-av">{{ human.name[0]|upper }}</div>
+      <div class="human-meta">
+        <div class="hname">
+          {{ human.name }}
+          {% if game.dealer_index == 0 %}
+            <span class="d-chip" style="position:relative;top:auto;right:auto;display:inline-flex;">D</span>
+          {% endif %}
+        </div>
+        <div class="hchips">
+          {{ human.chips }} chips{% if human.current_bet > 0 %} · bet {{ human.current_bet }}{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="rack">
+      <div class="crow rack-crow">
+        {%- for code, label in game.visible_hole_cards(human) -%}{{ C(code, label) }}{%- endfor -%}
+      </div>
+    </div>
+
+    {# Actions #}
+    {% if game.awaiting_human and options %}
+    <div class="action-zone">
+      <div class="abts">
+        <form method="post" action="{{ url_for('action') }}">
+          <input type="hidden" name="action" value="{{ 'check' if options.can_check else 'call' }}" />
+          <button class="btn {{ 'btn-check' if options.can_check else 'btn-call' }}" type="submit">
+            {{ 'Check' if options.can_check else 'Call ' ~ options.call_amount }}
+          </button>
+        </form>
+        <form method="post" action="{{ url_for('action') }}">
+          <input type="hidden" name="action" value="fold" />
+          <button class="btn btn-fold" type="submit">Fold</button>
+        </form>
+      </div>
+      {% if options.can_raise %}
+      <div class="raise-box">
+        <div class="raise-row">
+          <input class="raise-sld" id="rs" type="range"
+                 min="{{ options.min_raise }}" max="{{ options.max_raise }}" value="{{ options.min_raise }}"
+                 oninput="syncR(this.value)" />
+          <input class="raise-inp" id="ri" type="number"
+                 min="{{ options.min_raise }}" max="{{ options.max_raise }}" value="{{ options.min_raise }}"
+                 oninput="syncR(this.value)" />
+        </div>
+        <div class="raise-lim">{{ options.min_raise }} – {{ options.max_raise }}</div>
+        <div class="raise-pre">
+          <button class="btn-pre" type="button" onclick="syncR({{ options.min_raise }})">Min</button>
+          <button class="btn-pre" type="button" onclick="syncR({{ ((options.min_raise + options.max_raise) / 2)|int }})">½ Pot</button>
+          <button class="btn-pre" type="button" onclick="syncR({{ ((options.min_raise * 3 + options.max_raise) / 4)|int }})">¾</button>
+          <button class="btn-pre" type="button" onclick="syncR({{ options.max_raise }})">All-in</button>
+        </div>
+        <form method="post" action="{{ url_for('action') }}" style="text-align:center;">
+          <input type="hidden" name="action" value="raise" />
+          <input type="hidden" name="raise_to" id="rv" value="{{ options.min_raise }}" />
+          <button class="btn btn-raise" type="submit"
+                  onclick="document.getElementById('rv').value=document.getElementById('ri').value;">
+            Raise ↑
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+
+    {% elif game.hand_over %}
+    <div class="action-zone">
+      <div class="abts">
+        {% if not game.game_over %}
+        <form method="post" action="{{ url_for('next_hand') }}">
+          <button class="btn btn-next" type="submit">Next Hand →</button>
+        </form>
+        {% endif %}
+        <form method="post" action="{{ url_for('new_game') }}">
+          <button class="btn btn-new" type="submit">New Game</button>
+        </form>
+      </div>
+    </div>
+
+    {% else %}
+    <div class="waiting-txt">Bots are thinking…</div>
+    {% endif %}
+
+  </div>{# /human-area #}
+</div>{# /felt #}
+</div>{# /wood-frame #}
+
+{# ── BOTTOM PANELS ── #}
+<div class="grid2">
+  <div class="panel">
+    <div class="pttl">Hand Log</div>
+    <ul class="log-ul">
+      {% for msg in game.messages|reverse %}<li>{{ msg }}</li>{% endfor %}
+    </ul>
+  </div>
+  <div class="panel">
+    {% if stats %}
+    <div class="pttl">Your Stats</div>
+    <table class="stbl">
+      <thead><tr><th>Hands</th><th>Wins</th><th>Win %</th><th>Chips Won</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>{{ stats.hands_played }}</td><td>{{ stats.wins }}</td>
+          <td>{{ '%.1f'|format(stats.win_rate) }}%</td><td>{{ stats.total_chips_won }}</td>
+        </tr>
+      </tbody>
+    </table>
+    {% endif %}
+    {% if leaderboard %}
+    <div class="pttl{{ ' mt' if stats }}">Leaderboard</div>
+    <table class="stbl">
+      <thead><tr><th>#</th><th>Name</th><th>Win %</th><th>Chips</th></tr></thead>
+      <tbody>
+        {% for row in leaderboard %}
+        <tr {{ 'class="hl"'|safe if stats and row.name|lower == stats.name|lower }}>
+          <td>
+            {% if loop.index==1 %}<span class="rk rk1">1</span>
+            {% elif loop.index==2 %}<span class="rk rk2">2</span>
+            {% elif loop.index==3 %}<span class="rk rk3">3</span>
+            {% else %}<span class="rk rkn">{{ loop.index }}</span>{% endif %}
+          </td>
+          <td>{{ row.name }}</td>
+          <td>{{ '%.1f'|format(row.win_rate) }}%</td>
+          <td>{{ row.total_chips_won }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% elif stats_error %}
+    <p style="color:#6a5030;font-size:11px;margin-top:8px;">Stats unavailable.</p>
+    {% else %}
+    <p style="color:#6a5030;font-size:11px;margin-top:8px;">No data yet — keep playing!</p>
+    {% endif %}
+  </div>
+</div>
+
+{% endif %}
+</div>{# /page #}
+
+<script>
+function syncR(v) {
+  const s = document.getElementById('rs'), i = document.getElementById('ri');
+  if (!s || !i) return;
+  v = Math.max(parseInt(s.min), Math.min(parseInt(s.max), parseInt(v)));
+  s.value = v; i.value = v;
+}
+</script>
+</body>
+</html>
