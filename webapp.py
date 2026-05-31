@@ -6,7 +6,7 @@ from pathlib import Path
 from random import random, sample
 from uuid import uuid4
 
-from flask import Flask, redirect, render_template_string, request, session, url_for
+from flask import Flask, redirect, render_template, request, session, url_for
 from psycopg2 import Error as DatabaseError
 
 from bot_learner import BotLearner
@@ -626,222 +626,6 @@ class WebPokerGame:
         return []
 
 
-TEMPLATE = """
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Poker Web App</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; background: #10151f; color: #e8eefc; }
-    .card { background: #1a2333; border: 1px solid #2d3a52; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-    td, th { border: 1px solid #2d3a52; padding: 8px; text-align: left; }
-    button { padding: 8px 12px; margin-right: 8px; }
-    input[type=number], input[type=text] { padding: 6px; width: 180px; }
-    select { padding: 6px; }
-    .muted { color: #9fb0d8; }
-    .stack { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    ul { max-height: 260px; overflow: auto; }
-    .cards-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-    .card-slot { position: relative; width: 56px; height: 78px; display: inline-flex; }
-    .card-img, .card-fallback {
-      width: 56px; height: 78px; border-radius: 7px; border: 1px solid #2d3a52;
-      background: #0b1322; display: inline-flex; align-items: center; justify-content: center;
-      font-weight: 700; letter-spacing: 0.3px;
-    }
-    .card-img { object-fit: cover; }
-    .card-fallback { color: #ffffff; font-size: 16px; }
-  </style>
-</head>
-<body>
-  <h1>Texas Hold'em — Web (Single Player + Bots)</h1>
-
-  {% macro render_cards(card_entries) -%}
-    <div class="cards-row">
-      {% for code, label in card_entries %}
-        <span class="card-slot">
-          <img
-            class="card-img"
-            src="{{ url_for('static', filename='cards/' ~ code ~ '.png') }}"
-            alt="{{ label }}"
-            onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-flex';"
-          />
-          <span class="card-fallback" style="display:none;">{{ label }}</span>
-        </span>
-      {% endfor %}
-      {% if not card_entries %}
-        <span class="muted">-</span>
-      {% endif %}
-    </div>
-  {%- endmacro %}
-
-  {% if not game %}
-    <div class="card">
-      <h2>Start Game</h2>
-      <form method="post" action="{{ url_for('new_game') }}">
-        <label for="player-name"><strong>Name</strong></label><br />
-        <input
-          id="player-name"
-          name="player_name"
-          type="text"
-          maxlength="{{ max_name_len }}"
-          value="{{ player_name }}"
-          placeholder="Enter your name"
-          required
-        />
-        {% if name_error %}
-          <p class="muted">{{ name_error }}</p>
-        {% endif %}
-        <br />
-        <label for="player-count"><strong>Players</strong> (including you)</label><br />
-        <select id="player-count" name="player_count">
-          {% for count in player_counts %}
-            <option value="{{ count }}" {% if count == selected_count %}selected{% endif %}>
-              {{ count }}
-            </option>
-          {% endfor %}
-        </select>
-        <button type="submit">Start New Game</button>
-      </form>
-      <p class="muted">
-        You will play against {{ selected_count - 1 }} bot{{ '' if selected_count - 1 == 1 else 's' }}.
-      </p>
-    </div>
-  {% else %}
-    <div class="card">
-      <div><strong>Hand:</strong> {{ game.hand_number }} | <strong>Street:</strong> {{ game.street|upper }} | <strong>Pot:</strong> {{ game.table.pot }}</div>
-      <div class="muted"><strong>Board:</strong></div>
-      {{ render_cards(game.visible_board_cards()) }}
-    </div>
-
-    <div class="card">
-      <strong>Players</strong>
-      <table>
-        <thead><tr><th>Name</th><th>Chips</th><th>Current Bet</th><th>Status</th><th>Cards</th></tr></thead>
-        <tbody>
-        {% for player in game.players %}
-          <tr>
-            <td>{{ player.name }}</td>
-            <td>{{ player.chips }}</td>
-            <td>{{ player.current_bet }}</td>
-            <td>
-              {% if player.folded %}Folded{% elif player.chips <= 0 and not player.hole_cards %}Out{% else %}Active{% endif %}
-            </td>
-            <td>{{ render_cards(game.visible_hole_cards(player)) }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="card">
-      <strong>Actions</strong>
-      {% if game.awaiting_human and options %}
-        <div class="stack" style="margin-top: 10px;">
-          <form method="post" action="{{ url_for('action') }}">
-            <input type="hidden" name="action" value="{{ 'check' if options.can_check else 'call' }}" />
-            <button type="submit">{{ 'Check' if options.can_check else 'Call ' ~ options.call_amount }}</button>
-          </form>
-
-          <form method="post" action="{{ url_for('action') }}">
-            <input type="hidden" name="action" value="fold" />
-            <button type="submit">Fold</button>
-          </form>
-
-          {% if options.can_raise %}
-            <form method="post" action="{{ url_for('action') }}">
-              <input type="hidden" name="action" value="raise" />
-              <input type="number" name="raise_to" min="{{ options.min_raise }}" max="{{ options.max_raise }}" required />
-              <button type="submit">Raise ({{ options.min_raise }} - {{ options.max_raise }})</button>
-            </form>
-          {% else %}
-            <span class="muted">Raise unavailable.</span>
-          {% endif %}
-        </div>
-      {% elif game.hand_over %}
-        <div class="stack" style="margin-top: 10px;">
-          {% if not game.game_over %}
-            <form method="post" action="{{ url_for('next_hand') }}">
-              <button type="submit">Play Next Hand</button>
-            </form>
-          {% endif %}
-          <form method="post" action="{{ url_for('new_game') }}">
-            <button type="submit">Start New Game</button>
-          </form>
-        </div>
-      {% else %}
-        <p class="muted">Bots are acting...</p>
-      {% endif %}
-    </div>
-
-    <div class="card">
-      <strong>Hand Log</strong>
-      <ul>
-        {% for message in game.messages|reverse %}
-          <li>{{ message }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-  {% endif %}
-
-  <div class="card">
-    <strong>Your Stats</strong>
-    {% if not player_name %}
-      <p class="muted">Set your name to see your stats.</p>
-    {% elif stats_error %}
-      <p class="muted">Stats unavailable: {{ stats_error }}</p>
-    {% elif stats %}
-      <table>
-        <thead>
-          <tr><th>Name</th><th>Hands</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Chips Won</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>{{ stats.name }}</td>
-            <td>{{ stats.hands_played }}</td>
-            <td>{{ stats.wins }}</td>
-            <td>{{ stats.losses }}</td>
-            <td>{{ '%.1f'|format(stats.win_rate) }}%</td>
-            <td>{{ stats.total_chips_won }}</td>
-          </tr>
-        </tbody>
-      </table>
-    {% else %}
-      <p class="muted">No stats yet.</p>
-    {% endif %}
-  </div>
-
-  <div class="card">
-    <strong>Leaderboard</strong>
-    {% if not player_name %}
-      <p class="muted">Set your name to see your leaderboard.</p>
-    {% elif stats_error %}
-      <p class="muted">Leaderboard unavailable: {{ stats_error }}</p>
-    {% elif leaderboard %}
-      <table>
-        <thead>
-          <tr><th>#</th><th>Name</th><th>Hands</th><th>Win Rate</th><th>Chips Won</th></tr>
-        </thead>
-        <tbody>
-          {% for row in leaderboard %}
-            <tr>
-              <td>{{ loop.index }}</td>
-              <td>{{ row.name }}</td>
-              <td>{{ row.hands_played }}</td>
-              <td>{{ '%.1f'|format(row.win_rate) }}%</td>
-              <td>{{ row.total_chips_won }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <p class="muted">No stats yet.</p>
-    {% endif %}
-  </div>
-</body>
-</html>
-"""
 
 app = Flask(__name__)
 app.secret_key = "poker-workshop-secret"
@@ -878,8 +662,8 @@ def index():
             leaderboard = get_global_leaderboard()
     except (RuntimeError, DatabaseError) as exc:
         stats_error = str(exc)
-    return render_template_string(
-        TEMPLATE,
+    return render_template(
+        "game.html",
         game=game,
         options=options,
         player_counts=range(MIN_PLAYERS, MAX_PLAYERS + 1),
@@ -950,4 +734,4 @@ def action():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5001)
